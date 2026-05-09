@@ -1,0 +1,259 @@
+# ============================================================
+#   DATABASE FOR DATA ENGINEERS — Simple → Medium Guide
+#   No prior experience needed. Read top to bottom.
+# ============================================================
+#
+#   WHAT IS A DATABASE?
+#   Think of it like an Excel file stored on a server.
+#   It has "tables" (sheets) with rows and columns.
+#   We use SQL (a simple language) to ask questions like:
+#   "Give me all customers who spent more than $100"
+#
+#   WHAT TOOLS DO WE USE IN PYTHON?
+#   - sqlite3    → built-in Python library, no install needed
+#                  uses a local file as a database (perfect to learn)
+#   - pandas     → turns database results into a table you can work with
+#   - sqlalchemy → professional tool to connect to real databases
+#                  (PostgreSQL, MySQL, etc.)
+#
+#   INSTALL WHAT YOU NEED:
+#   pip install pandas sqlalchemy
+#
+# ============================================================
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 1 — THE ABSOLUTE BASICS (sqlite3, no install needed)
+# ════════════════════════════════════════════════════════════
+
+import sqlite3
+
+# ── Step 1: Open a connection to a database ──────────────────
+# ":memory:" means "create a temporary DB in RAM" — great for learning
+# To save to disk, replace ":memory:" with "myfile.db"
+connection = sqlite3.connect(":memory:")
+
+# A "cursor" is like a pen — you use it to write/read from the DB
+cursor = connection.cursor()
+
+
+# ── Step 2: Create a table ───────────────────────────────────
+# This is like adding a new sheet in Excel and naming the columns
+cursor.execute("""
+    CREATE TABLE customers (
+        id       INTEGER PRIMARY KEY,
+        name     TEXT,
+        city     TEXT,
+        spending REAL
+    )
+""")
+
+
+# ── Step 3: Insert rows ──────────────────────────────────────
+# The "?" are placeholders — always use them instead of putting
+# values directly in the string (avoids security issues)
+customers = [
+    (1, "Alice",   "New York",  320.50),
+    (2, "Bob",     "London",     89.99),
+    (3, "Carol",   "New York",  540.00),
+    (4, "Dave",    "Paris",      15.00),
+    (5, "Emma",    "London",    210.75),
+]
+cursor.executemany("INSERT INTO customers VALUES (?, ?, ?, ?)", customers)
+connection.commit()  # ← save changes (like Ctrl+S)
+
+
+# ── Step 4: Read data back ───────────────────────────────────
+cursor.execute("SELECT * FROM customers")
+
+rows = cursor.fetchall()  # get ALL rows at once
+print("── All customers ──────────────────────────────")
+for row in rows:
+    print(row)
+# Output: (1, 'Alice', 'New York', 320.5)  ← each row is a tuple
+
+
+# ── Step 5: Filter with WHERE ────────────────────────────────
+# "Give me customers from London"
+cursor.execute("SELECT name, spending FROM customers WHERE city = ?", ("London",))
+print("\n── Customers from London ──────────────────────")
+for row in cursor.fetchall():
+    print(row)
+
+
+# ── Step 6: Close when done ──────────────────────────────────
+connection.close()
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 2 — ADD PANDAS (turn results into a real table)
+# ════════════════════════════════════════════════════════════
+#
+# Raw SQL results are lists of tuples — hard to work with.
+# pandas turns them into a DataFrame: a proper table with
+# named columns, filters, stats, and easy exports.
+
+import pandas as pd
+
+# Reconnect (we closed it above)
+connection = sqlite3.connect(":memory:")
+
+# Re-create and fill the table
+pd.DataFrame(customers, columns=["id", "name", "city", "spending"]) \
+  .to_sql("customers", connection, index=False, if_exists="replace")
+#         ↑ table name    ↑ connection          ↑ drop & recreate if exists
+
+
+# ── Read a full table into a DataFrame ───────────────────────
+df = pd.read_sql("SELECT * FROM customers", connection)
+
+print("\n\n── DataFrame (all customers) ──────────────────")
+print(df)
+#    id   name      city  spending
+# 0   1  Alice  New York    320.50
+# 1   2    Bob    London     89.99
+# ...
+
+
+# ── Now you can use ALL pandas features ──────────────────────
+
+# Filter rows
+high_spenders = df[df["spending"] > 200]
+print("\n── High spenders (> $200) ─────────────────────")
+print(high_spenders)
+
+# Add a calculated column
+df["spending_eur"] = (df["spending"] * 0.92).round(2)
+
+# Group by city and sum spending
+by_city = df.groupby("city")["spending"].sum().reset_index()
+by_city.columns = ["city", "total_spending"]
+print("\n── Total spending by city ─────────────────────")
+print(by_city)
+
+# Quick stats
+print("\n── Spending stats ─────────────────────────────")
+print(df["spending"].describe())
+
+
+# ── Save DataFrame back to the database ──────────────────────
+# This is the "Load" step in ETL (Extract → Transform → Load)
+high_spenders.to_sql("vip_customers", connection, index=False, if_exists="replace")
+print("\n── VIP table saved to DB ✓")
+
+connection.close()
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 3 — SQLALCHEMY (connect to real databases)
+# ════════════════════════════════════════════════════════════
+#
+# In real jobs you connect to PostgreSQL, MySQL, etc. on a server.
+# SQLAlchemy is the standard Python library for this.
+# It works exactly the same as what you learned above,
+# just with a different connection string.
+
+from sqlalchemy import create_engine, text
+
+# ── How to connect to different databases ────────────────────
+#
+# SQLite (local file):
+#   engine = create_engine("sqlite:///myfile.db")
+#
+# PostgreSQL (most common in data engineering):
+#   engine = create_engine("postgresql+psycopg2://user:password@host:5432/dbname")
+#
+# MySQL:
+#   engine = create_engine("mysql+pymysql://user:password@host:3306/dbname")
+#
+# TIP: Never hardcode passwords in your code!
+# Use environment variables instead:
+#
+#   import os
+#   password = os.getenv("DB_PASSWORD")
+#   engine = create_engine(f"postgresql+psycopg2://user:{password}@host/dbname")
+
+
+# For this demo we keep using SQLite in memory
+engine = create_engine("sqlite:///:memory:")
+
+# ── Write a DataFrame to the DB ──────────────────────────────
+data = pd.DataFrame({
+    "order_id":    [101, 102, 103, 104, 105],
+    "customer":    ["Alice", "Bob", "Alice", "Carol", "Bob"],
+    "product":     ["Laptop", "Mouse", "Monitor", "Keyboard", "Laptop"],
+    "amount":      [999.0, 25.0, 349.0, 79.0, 999.0],
+    "status":      ["shipped", "pending", "shipped", "shipped", "cancelled"],
+})
+
+data.to_sql("orders", engine, index=False, if_exists="replace")
+
+
+# ── Read with a parameterised query ──────────────────────────
+# ":status" is a named placeholder (safer and cleaner than string formatting)
+query = text("SELECT * FROM orders WHERE status = :status")
+
+with engine.connect() as conn:
+    df = pd.read_sql(query, conn, params={"status": "shipped"})
+
+print("\n\n── Shipped orders ─────────────────────────────")
+print(df)
+
+
+# ── A simple ETL pipeline ────────────────────────────────────
+#
+# ETL = Extract → Transform → Load
+# This is the core loop of data engineering.
+#
+#   Extract   = read raw data from a source DB
+#   Transform = clean, filter, enrich the data
+#   Load      = write the result to a destination
+
+def run_etl(source_engine, target_engine):
+    print("\n── Running ETL pipeline ───────────────────────")
+
+    # 1. EXTRACT — read raw data
+    raw = pd.read_sql("SELECT * FROM orders", source_engine)
+    print(f"  Extracted {len(raw)} rows")
+
+    # 2. TRANSFORM — clean and enrich
+    df = raw.copy()
+    df = df[df["status"] == "shipped"]            # keep only shipped orders
+    df["amount_eur"] = (df["amount"] * 0.92).round(2)  # add EUR column
+    df["customer"] = df["customer"].str.upper()   # normalize names
+    print(f"  Transformed → {len(df)} rows after filtering")
+
+    # 3. LOAD — write to destination
+    df.to_sql("shipped_orders", target_engine, index=False, if_exists="replace")
+    print(f"  Loaded into 'shipped_orders' table ✓")
+
+    return df
+
+
+result = run_etl(engine, engine)  # using same DB; in real life these differ
+print("\n── ETL result ─────────────────────────────────")
+print(result)
+
+
+# ════════════════════════════════════════════════════════════
+# QUICK REFERENCE CARD
+# ════════════════════════════════════════════════════════════
+#
+#   TASK                          CODE
+#   ─────────────────────────────────────────────────────────
+#   Connect (SQLite)              sqlite3.connect("file.db")
+#   Connect (any DB)              create_engine("dialect://...")
+#   Read table → DataFrame        pd.read_sql("SELECT ...", conn)
+#   Write DataFrame → DB          df.to_sql("table", engine)
+#   Filter rows                   df[df["col"] > value]
+#   Add column                    df["new"] = df["old"] * 2
+#   Group + aggregate             df.groupby("col")["val"].sum()
+#   Quick stats                   df.describe()
+#   Save to CSV                   df.to_csv("output.csv", index=False)
+#   ─────────────────────────────────────────────────────────
+#
+#   NEXT STEPS TO LEARN:
+#   1. pandas  →  https://pandas.pydata.org/docs/
+#   2. SQL     →  https://sqlzoo.net  (free interactive exercises)
+#   3. SQLAlchemy → https://docs.sqlalchemy.org
+#   4. Try connecting to a free PostgreSQL DB on https://neon.tech
