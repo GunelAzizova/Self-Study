@@ -1,0 +1,558 @@
+# ============================================================
+#   PYTHON WEB SCRAPING — Zero to Advanced Guide
+#   Read top to bottom. Each level builds on the previous one.
+# ============================================================
+#
+#   WHAT IS WEB SCRAPING?
+#   It means writing code that visits a website and automatically
+#   collects data from it — like copy-pasting, but at scale.
+#
+#   REAL EXAMPLES:
+#   - Collect product prices from 50 e-commerce sites every hour
+#   - Scrape job postings from LinkedIn every morning
+#   - Monitor news headlines and store them in a database
+#
+#   THE TOOLS WE WILL USE (in order of complexity):
+#   ┌──────────────────┬────────────────────────────────────────┐
+#   │ Library          │ What it does                           │
+#   ├──────────────────┼────────────────────────────────────────┤
+#   │ requests         │ Download a webpage (like your browser) │
+#   │ BeautifulSoup    │ Read and navigate the HTML content     │
+#   │ pandas           │ Store and export the scraped data      │
+#   │ time / random    │ Add delays so you don't get blocked    │
+#   │ selenium         │ Control a real browser (for JS sites)  │
+#   │ playwright       │ Faster browser automation alternative  │
+#   │ scrapy           │ Full scraping framework for big jobs   │
+#   └──────────────────┴────────────────────────────────────────┘
+#
+#   INSTALL EVERYTHING AT ONCE:
+#   pip install requests beautifulsoup4 pandas lxml selenium playwright
+#   playwright install chromium
+#
+# ============================================================
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 0 — HOW WEBSITES WORK (READ THIS FIRST!)
+# ════════════════════════════════════════════════════════════
+#
+#   When you open a website in your browser, here is what happens:
+#
+#   1. Your browser sends a REQUEST  →  "Give me google.com"
+#   2. The server sends back a RESPONSE  →  HTML text (the page)
+#   3. Your browser RENDERS the HTML  →  You see the pretty page
+#
+#   Web scraping = step 1 and 2, but in Python, not a browser.
+#   We download the HTML text, then find the data we want inside it.
+#
+#   WHAT IS HTML?
+#   HTML is the language of web pages. Every piece of content
+#   lives inside "tags" like these:
+#
+#   <h1>Big Title</h1>               ← heading
+#   <p>Some paragraph text.</p>      ← paragraph
+#   <a href="https://...">Click</a>  ← link
+#   <div class="price">$29.99</div>  ← a container (very common)
+#   <table><tr><td>Cell</td></tr></table> ← a table
+#
+#   HOW TO FIND THE RIGHT HTML TAG:
+#   1. Open any website in Chrome or Firefox
+#   2. Right-click on the text you want  →  "Inspect"
+#   3. The DevTools panel shows you the exact HTML tag
+#   4. Copy the tag name, class, or id — then use it in your code
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 1 — DOWNLOAD A PAGE  (requests)
+# ════════════════════════════════════════════════════════════
+
+import requests
+
+# ── What is a response? ──────────────────────────────────────
+# requests.get() sends a GET request to a URL, just like your browser.
+# We use a safe practice site made for scraping learners.
+
+url = "https://books.toscrape.com"
+response = requests.get(url)
+
+# The response object has several useful attributes:
+print("Status code:", response.status_code)
+# 200 = OK,  404 = Not Found,  403 = Forbidden,  429 = Too Many Requests
+
+print("Content type:", response.headers["Content-Type"])
+# text/html → it's a webpage    application/json → it's an API response
+
+# The actual HTML text (first 500 characters so we don't flood the screen)
+print("\nFirst 500 chars of HTML:")
+print(response.text[:500])
+
+
+# ── Always check status before continuing ────────────────────
+if response.status_code == 200:
+    print("\nPage downloaded successfully ✓")
+else:
+    print(f"Something went wrong: {response.status_code}")
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 2 — PARSE HTML  (BeautifulSoup)
+# ════════════════════════════════════════════════════════════
+#
+#   BeautifulSoup turns raw HTML text into a navigable object
+#   so you can search for specific tags, classes, and text.
+#
+#   MAIN METHODS:
+#   soup.find("tag")               → first match
+#   soup.find("tag", class_="x")  → first match with that class
+#   soup.find_all("tag")          → ALL matches as a list
+#   element.text                  → the visible text inside a tag
+#   element["href"]               → the value of an attribute
+
+from bs4 import BeautifulSoup
+
+response = requests.get("https://books.toscrape.com")
+soup = BeautifulSoup(response.text, "lxml")
+# "lxml" is the HTML parser (engine). It's fast and forgiving of bad HTML.
+
+
+# ── Find a single element ────────────────────────────────────
+title = soup.find("title")
+print("\nPage title tag:", title)        # <title>All products | ...</title>
+print("Page title text:", title.text)   # All products | ...
+
+
+# ── Find all elements of the same type ───────────────────────
+# Each book on the page is inside an <article class="product_pod"> tag
+books = soup.find_all("article", class_="product_pod")
+print(f"\nFound {len(books)} books on this page")
+
+
+# ── Extract data from each element ───────────────────────────
+print("\n── First 3 books ──────────────────────────────")
+for book in books[:3]:
+
+    # Book title is inside <h3><a title="...">
+    title = book.find("h3").find("a")["title"]
+
+    # Price is inside <p class="price_color">
+    price = book.find("p", class_="price_color").text.strip()
+
+    # Rating is a CSS class like "One", "Two", "Three"...
+    rating_class = book.find("p", class_="star-rating")["class"]
+    rating = rating_class[1]  # e.g. ["star-rating", "Three"] → "Three"
+
+    print(f"  {title[:40]:<40} {price}  ★ {rating}")
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 3 — SCRAPE MULTIPLE PAGES  (pagination)
+# ════════════════════════════════════════════════════════════
+#
+#   Most websites split results across multiple pages.
+#   We need to detect the "Next" button and follow it.
+
+import time
+import random
+import pandas as pd
+
+def scrape_books(max_pages: int = 3) -> pd.DataFrame:
+    """
+    Scrapes books from books.toscrape.com across multiple pages.
+    Returns a clean DataFrame.
+    """
+    base_url = "https://books.toscrape.com/catalogue/"
+    current_url = "https://books.toscrape.com/catalogue/page-1.html"
+    all_books = []
+    page_num = 1
+
+    while current_url and page_num <= max_pages:
+        print(f"  Scraping page {page_num} → {current_url}")
+
+        response = requests.get(current_url)
+        soup = BeautifulSoup(response.text, "lxml")
+
+        # ── Extract all books on this page ───────────────────
+        for book in soup.find_all("article", class_="product_pod"):
+            all_books.append({
+                "title":  book.find("h3").find("a")["title"],
+                "price":  book.find("p", class_="price_color").text.strip(),
+                "rating": book.find("p", class_="star-rating")["class"][1],
+                "link":   base_url + book.find("h3").find("a")["href"],
+            })
+
+        # ── Find the "next" button ────────────────────────────
+        next_btn = soup.find("li", class_="next")
+        if next_btn:
+            next_href = next_btn.find("a")["href"]
+            current_url = base_url + next_href
+        else:
+            current_url = None  # no more pages, stop the loop
+
+        page_num += 1
+
+        # ── BE POLITE: wait between requests ─────────────────
+        # Random delay between 1 and 3 seconds.
+        # Without this you may get blocked or harm the server.
+        time.sleep(random.uniform(1, 3))
+
+    df = pd.DataFrame(all_books)
+    return df
+
+
+print("\n── Scraping books (3 pages) ───────────────────")
+books_df = scrape_books(max_pages=3)
+print(f"Collected {len(books_df)} books\n")
+print(books_df.head())
+
+
+# ── Clean the data ───────────────────────────────────────────
+# Convert price from "£12.99" string → 12.99 float
+books_df["price_num"] = (
+    books_df["price"]
+    .str.replace("£", "", regex=False)
+    .str.replace("Â", "", regex=False)   # encoding artifact
+    .astype(float)
+)
+
+# Convert rating from word → number
+rating_map = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5}
+books_df["rating_num"] = books_df["rating"].map(rating_map)
+
+# Save to CSV (your portable data file)
+books_df.to_csv("books.csv", index=False)
+print("\nData saved to books.csv ✓")
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 4 — LOOK LIKE A REAL BROWSER  (headers + sessions)
+# ════════════════════════════════════════════════════════════
+#
+#   Some websites block Python scrapers immediately.
+#   You can avoid this by:
+#   1. Sending real browser "headers" with your request
+#   2. Using a Session (keeps cookies, like a logged-in browser)
+
+# ── Headers ──────────────────────────────────────────────────
+# By default requests sends "python-requests/2.x" as User-Agent.
+# Websites see that and know it's a bot. Send browser headers instead.
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.google.com/",  # pretend you came from Google
+}
+
+# ── Session ──────────────────────────────────────────────────
+# A Session reuses the same connection and keeps cookies automatically.
+# This is how you stay "logged in" while scraping multiple pages.
+
+session = requests.Session()
+session.headers.update(HEADERS)
+
+response = session.get("https://books.toscrape.com")
+print("\nWith session + headers:", response.status_code)
+
+# For sites that need login:
+# session.post("https://example.com/login", data={"user": "me", "pass": "123"})
+# session.get("https://example.com/private-page")  ← now you're authenticated
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 5 — SCRAPE APIS  (JSON responses)
+# ════════════════════════════════════════════════════════════
+#
+#   Modern websites load data via hidden API calls.
+#   In your browser DevTools → Network tab → Filter "Fetch/XHR"
+#   You'll see JSON requests — these are MUCH easier to scrape
+#   than HTML because the data is already structured.
+#
+#   HOW TO FIND THEM:
+#   1. Open DevTools (F12)  →  Network tab
+#   2. Reload the page or click around
+#   3. Look for requests returning JSON data
+#   4. Copy that URL into your Python code
+
+# Example: Open-Meteo is a free weather API (no key needed)
+def get_weather(city_lat: float, city_lon: float) -> dict:
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude":   city_lat,
+        "longitude":  city_lon,
+        "current":    "temperature_2m,wind_speed_10m",
+        "timezone":   "auto",
+    }
+    response = requests.get(url, params=params)
+    return response.json()  # .json() parses the JSON automatically
+
+
+weather = get_weather(40.7128, -74.0060)  # New York
+print("\n── Weather API example ────────────────────────")
+print("Temperature:", weather["current"]["temperature_2m"], "°C")
+print("Wind speed:",  weather["current"]["wind_speed_10m"], "km/h")
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 6 — DYNAMIC PAGES  (Selenium / JavaScript sites)
+# ════════════════════════════════════════════════════════════
+#
+#   Some pages load content AFTER the page opens using JavaScript.
+#   requests can't handle this — it only gets the initial HTML.
+#
+#   For these sites, you need Selenium or Playwright.
+#   They control a REAL browser — Chrome, Firefox — from Python.
+#
+#   INSTALL:
+#   pip install selenium
+#   Download ChromeDriver: https://chromedriver.chromium.org
+#   (must match your Chrome version)
+#
+#   The code below shows the pattern. Uncomment to run it.
+
+# from selenium import webdriver
+# from selenium.webdriver.common.by import By
+# from selenium.webdriver.support.ui import WebDriverWait
+# from selenium.webdriver.support import expected_conditions as EC
+# from selenium.webdriver.chrome.options import Options
+#
+# # Run in "headless" mode = no visible window (faster, good for servers)
+# options = Options()
+# options.add_argument("--headless")
+# options.add_argument("--no-sandbox")
+# options.add_argument("--disable-dev-shm-usage")
+#
+# driver = webdriver.Chrome(options=options)
+#
+# try:
+#     driver.get("https://books.toscrape.com")
+#
+#     # Wait up to 10 seconds for a specific element to appear
+#     # (important! JS pages load slowly)
+#     wait = WebDriverWait(driver, 10)
+#     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.product_pod")))
+#
+#     # Now grab the elements
+#     books = driver.find_elements(By.CSS_SELECTOR, "article.product_pod")
+#     for book in books[:3]:
+#         title = book.find_element(By.CSS_SELECTOR, "h3 a").get_attribute("title")
+#         price = book.find_element(By.CSS_SELECTOR, ".price_color").text
+#         print(f"{title[:40]} {price}")
+#
+#     # You can also interact with the page:
+#     # driver.find_element(By.ID, "search-input").send_keys("python")
+#     # driver.find_element(By.ID, "search-button").click()
+#     # time.sleep(2)  # wait for results to load
+#
+# finally:
+#     driver.quit()  # ALWAYS close the browser, even on error
+
+
+# ════════════════════════════════════════════════════════════
+# LEVEL 7 — ADVANCED: FULL PRODUCTION SCRAPER
+# ════════════════════════════════════════════════════════════
+#
+#   A real scraper used in production needs:
+#   ✓ Retry logic       (handle network failures automatically)
+#   ✓ Logging           (know what happened when you weren't watching)
+#   ✓ Error handling    (don't crash on one bad page)
+#   ✓ Rotating delays   (don't get banned)
+#   ✓ Data validation   (make sure scraped data makes sense)
+#   ✓ Export            (CSV, JSON, or direct to a database)
+
+import logging
+from dataclasses import dataclass
+
+# Set up a logger (writes messages with timestamps)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),              # print to terminal
+        logging.FileHandler("scraper.log"),   # also write to a file
+    ]
+)
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class Book:
+    """A structured data container for one book."""
+    title:      str
+    price:      float
+    rating:     int
+    url:        str
+
+    def is_valid(self) -> bool:
+        """Basic validation — reject clearly broken records."""
+        return (
+            bool(self.title) and
+            self.price > 0 and
+            1 <= self.rating <= 5
+        )
+
+
+class BookScraper:
+    """
+    A production-ready scraper class.
+
+    Using a class lets you:
+    - Keep shared settings in one place (base_url, session, delays)
+    - Separate concerns (fetching, parsing, saving are different methods)
+    - Easily extend or test individual parts
+    """
+
+    BASE_URL    = "https://books.toscrape.com/catalogue/"
+    START_URL   = "https://books.toscrape.com/catalogue/page-1.html"
+    RATING_MAP  = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5}
+    DELAY_RANGE = (1.0, 3.0)    # seconds between requests
+    MAX_RETRIES = 3              # how many times to retry a failed page
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update(HEADERS)
+
+    # ── Private: fetch one URL with retry logic ───────────────
+    def _fetch(self, url: str) -> BeautifulSoup | None:
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                resp = self.session.get(url, timeout=10)
+                resp.raise_for_status()  # raises exception for 4xx/5xx
+                return BeautifulSoup(resp.text, "lxml")
+            except requests.RequestException as err:
+                log.warning("Attempt %d/%d failed for %s: %s",
+                            attempt, self.MAX_RETRIES, url, err)
+                if attempt < self.MAX_RETRIES:
+                    time.sleep(2 ** attempt)  # wait 2s, then 4s, then 8s
+        log.error("All retries exhausted for %s", url)
+        return None  # return None so the caller can skip this page
+
+    # ── Private: parse one book article tag ──────────────────
+    def _parse_book(self, article) -> Book | None:
+        try:
+            price_text = (
+                article.find("p", class_="price_color")
+                .text.strip()
+                .replace("£", "")
+                .replace("Â", "")
+            )
+            rating_word = article.find("p", class_="star-rating")["class"][1]
+            href = article.find("h3").find("a")["href"]
+
+            return Book(
+                title  = article.find("h3").find("a")["title"],
+                price  = float(price_text),
+                rating = self.RATING_MAP.get(rating_word, 0),
+                url    = self.BASE_URL + href,
+            )
+        except Exception as err:
+            log.warning("Could not parse a book: %s", err)
+            return None  # skip this book, keep going
+
+    # ── Public: run the full scraper ─────────────────────────
+    def run(self, max_pages: int = 5) -> pd.DataFrame:
+        log.info("Starting scrape (max %d pages)", max_pages)
+        books: list[Book] = []
+        current_url = self.START_URL
+        page = 1
+
+        while current_url and page <= max_pages:
+            log.info("Page %d → %s", page, current_url)
+            soup = self._fetch(current_url)
+
+            if soup is None:
+                log.error("Skipping page %d due to repeated failures", page)
+                break
+
+            for article in soup.find_all("article", class_="product_pod"):
+                book = self._parse_book(article)
+                if book and book.is_valid():
+                    books.append(book)
+                else:
+                    log.debug("Dropped invalid book record")
+
+            # Find next page
+            next_btn = soup.find("li", class_="next")
+            current_url = (self.BASE_URL + next_btn.find("a")["href"]
+                           if next_btn else None)
+            page += 1
+
+            delay = random.uniform(*self.DELAY_RANGE)
+            log.info("  Waiting %.1f seconds …", delay)
+            time.sleep(delay)
+
+        log.info("Done. Collected %d valid books.", len(books))
+        return pd.DataFrame([b.__dict__ for b in books])
+
+    # ── Public: save results ──────────────────────────────────
+    def save(self, df: pd.DataFrame, path: str = "books_final.csv"):
+        df.to_csv(path, index=False)
+        log.info("Saved %d rows to %s", len(df), path)
+
+
+# ── Run the production scraper ───────────────────────────────
+print("\n\n── Running production scraper ─────────────────")
+scraper = BookScraper()
+df = scraper.run(max_pages=2)
+scraper.save(df)
+
+print("\nFinal dataset:")
+print(df[["title", "price", "rating"]].head(10))
+
+print("\n── Quick analysis ─────────────────────────────")
+print("Average price:  £", round(df["price"].mean(), 2))
+print("Average rating:", round(df["rating"].mean(), 2))
+print("Books per rating:\n", df["rating"].value_counts().sort_index())
+
+
+# ════════════════════════════════════════════════════════════
+# ETHICAL & LEGAL RULES — READ BEFORE SCRAPING ANYTHING
+# ════════════════════════════════════════════════════════════
+#
+#   ✅ DO:
+#   - Check robots.txt first → https://example.com/robots.txt
+#     (it tells you what the site allows to be scraped)
+#   - Add delays between requests (don't hammer the server)
+#   - Scrape only public data (no login bypass)
+#   - Check the site's Terms of Service
+#
+#   ❌ DON'T:
+#   - Scrape personal data without consent (GDPR / privacy laws)
+#   - Bypass CAPTCHAs or authentication
+#   - Scrape at high speed without delays
+#   - Use scraped data commercially without permission
+#
+#   SAFE SITES TO PRACTICE ON:
+#   - https://books.toscrape.com      (made for learning)
+#   - https://quotes.toscrape.com     (made for learning)
+#   - https://httpbin.org             (test your requests)
+#   - https://open-meteo.com          (free weather API)
+
+
+# ════════════════════════════════════════════════════════════
+# QUICK REFERENCE CARD
+# ════════════════════════════════════════════════════════════
+#
+#   TASK                              CODE
+#   ───────────────────────────────────────────────────────────
+#   Download a page                   requests.get(url)
+#   Parse HTML                        BeautifulSoup(html, "lxml")
+#   Find first tag                    soup.find("div", class_="x")
+#   Find all tags                     soup.find_all("a")
+#   Get text inside tag               element.text.strip()
+#   Get an attribute                  element["href"]
+#   Send browser headers              session.headers.update({...})
+#   Handle JSON API                   response.json()
+#   Wait between requests             time.sleep(random.uniform(1,3))
+#   Save to CSV                       df.to_csv("out.csv", index=False)
+#   ───────────────────────────────────────────────────────────
+#
+#   NEXT STEPS:
+#   1. Practice site     → https://books.toscrape.com
+#   2. CSS selectors     → https://css-selector.com (learn to target HTML)
+#   3. Playwright docs   → https://playwright.dev/python (modern Selenium)
+#   4. Scrapy framework  → https://scrapy.org (for large-scale scraping)
+#   5. ScraperAPI        → https://scraperapi.com (handle proxies/bans)
