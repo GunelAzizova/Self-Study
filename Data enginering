@@ -449,9 +449,52 @@ session.commit()
 
 
 
-with Session() as session:
-    ...
+# Yeni stil (SQLAlchemy 2.0+)
+stmt = select(Customer).where(Customer.city == "Baku")
+baku_customers = session.execute(stmt).scalars().all()
+
+# ORDER BY + LIMIT
+stmt = select(Customer)\
+    .order_by(Customer.spending.desc())\
+    .limit(10)
+
+
+
+# Ən tövsiyə olunan üsul
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+# İstifadə
+with SessionLocal() as session:
+    new_customer = Customer(name="Aysel", city="Ganja", spending=320)
+    session.add(new_customer)
     session.commit()
+    # session.refresh(new_customer)  # generated fields (id, created_at) üçün
+
+
+# Çox sürətli kütləvi insert
+session.bulk_insert_mappings(Customer, [
+    {"name": "Nurlan", "city": "Baku", "spending": 450},
+    {"name": "Elchin", "city": "Sumqayit", "spending": 280}
+])
+session.commit()
+
+
+
+result = session.execute(
+    select(Customer.name, Order.amount)
+    .join(Order)
+    .where(Customer.city == "Baku")
+)
+
+
+Aggregate (GROUP BY)
+
+Pythonstmt = select(
+    Customer.city,
+    func.sum(Customer.spending).label("total_spend"),
+    func.count(Customer.id).label("customer_count")
+).group_by(Customer.city)
+
 
 
 
