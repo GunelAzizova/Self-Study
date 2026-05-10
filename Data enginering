@@ -257,3 +257,201 @@ print(result)
 #   2. SQL     →  https://sqlzoo.net  (free interactive exercises)
 #   3. SQLAlchemy → https://docs.sqlalchemy.org
 #   4. Try connecting to a free PostgreSQL DB on https://neon.tech
+
+
+
+
+
+
+
+# Terminal
+pip install sqlalchemy pandas psycopg2-binary   # PostgreSQL üçün
+
+# Python
+from sqlalchemy import create_engine, text, MetaData, Table, Column
+from sqlalchemy import Integer, String, Float, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+import pandas as pd
+
+
+
+
+# SQLite (fayl əsaslı)
+engine = create_engine("sqlite:///shop.db", echo=False)
+
+
+
+# SQLite (yaddaşda - test üçün)
+engine = create_engine("sqlite:///:memory:", echo=True)
+
+# PostgreSQL nümunəsi
+# engine = create_engine(
+#     "postgresql+psycopg2://username:password@localhost:5432/mydatabase",
+#     echo=False,
+#     pool_pre_ping=True   # bağlantı problemlərini həll edir
+# )
+
+
+
+# Bağlantı açmaq
+with engine.connect() as conn:
+    
+    # SELECT
+    result = conn.execute(text("SELECT * FROM customers"))
+    rows = result.fetchall()          # siyahı qaytarır
+    # rows = result.mappings().all()  # dict kimi qaytarır (daha rahat)
+
+    # Parametrlə sorğu (TÖVSİYƏ OLUNAN)
+    result = conn.execute(
+        text("SELECT * FROM customers WHERE city = :city AND spending > :min_spend"),
+        {"city": "Baku", "min_spend": 200}
+    )
+
+
+
+
+
+with engine.connect() as conn:
+    # INSERT
+    conn.execute(text("""
+        INSERT INTO customers (name, city, spending) 
+        VALUES (:name, :city, :spending)
+    """), {"name": "Nurlan", "city": "Baku", "spending": 450.75})
+    
+    conn.commit()        # Əsas! Unutma
+
+
+
+
+
+
+# DataFrame → SQL
+df.to_sql(
+    name="customers", 
+    con=engine, 
+    index=False, 
+    if_exists="replace"   # replace / append / fail
+)
+
+# SQL → DataFrame
+df = pd.read_sql("SELECT * FROM customers", engine)
+
+# Parametrlə oxumaq
+df = pd.read_sql(text("SELECT * FROM customers WHERE city = :city"), 
+                 engine, params={"city": "Baku"})
+
+
+
+
+
+
+
+Base = declarative_base()
+
+class Customer(Base):
+    __tablename__ = 'customers'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    city = Column(String(50), index=True)           # indeks yaratmaq
+    spending = Column(Float, default=0.0)
+    email = Column(String(100), unique=True)
+    
+    # Relationship (əlaqə)
+    orders = relationship("Order", back_populates="customer")
+
+    def __repr__(self):
+        return f"<Customer {self.name}>"
+
+class Order(Base):
+    __tablename__ = 'orders'
+    
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey('customers.id'))
+    amount = Column(Float)
+    status = Column(String(20))
+    
+    customer = relationship("Customer", back_populates="orders")
+
+
+
+
+Base.metadata.create_all(engine)
+
+
+
+
+
+
+
+
+Session = sessionmaker(bind=engine)
+session = Session()
+
+# Yeni obyekt əlavə etmək
+new_customer = Customer(name="Aysel", city="Ganja", spending=320)
+session.add(new_customer)
+session.commit()          # yadda saxlamaq
+
+# Birdən çox əlavə etmək
+customers = [
+    Customer(name="Elchin", city="Baku", spending=500),
+    Customer(name="Leyla", city="Sumqayit", spending=180)
+]
+session.add_all(customers)
+session.commit()
+
+
+
+
+
+
+# Bütün müştərilər
+all_customers = session.query(Customer).all()
+
+# Filtrləmə
+baku_customers = session.query(Customer).filter(Customer.city == "Baku").all()
+
+# Bir neçə şərt
+high_spenders = session.query(Customer)\
+    .filter(Customer.spending > 300, Customer.city == "Baku")\
+    .all()
+
+# Sıralama
+sorted_customers = session.query(Customer)\
+    .order_by(Customer.spending.desc())\
+    .all()
+
+# Limit
+top5 = session.query(Customer).order_by(Customer.spending.desc()).limit(5).all()
+
+# İlk nəticə
+first = session.query(Customer).filter_by(name="Aysel").first()
+
+
+
+
+
+
+# Update
+customer = session.query(Customer).filter_by(id=5).first()
+if customer:
+    customer.spending = 650
+    customer.city = "Baku"
+    session.commit()
+
+# Delete
+session.query(Customer).filter(Customer.spending < 50).delete()
+session.commit()
+
+
+
+
+
+
+with Session() as session:
+    ...
+    session.commit()
+
+
+
